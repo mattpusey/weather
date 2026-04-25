@@ -1143,6 +1143,42 @@ def record_runtime_context(screen_mode):
         add_error_detail("Device time exception", f"{get_exception_name(e)}: {e}")
 
 
+def rtc_date_is_valid():
+    """Return True when the Pico RTC has a plausible date."""
+    try:
+        t = time.localtime()
+        return t[0] >= 2024
+    except:
+        return False
+
+
+def sync_time_if_needed():
+    """Use NTP only when the RTC date is clearly wrong."""
+    if rtc_date_is_valid():
+        add_error_detail("RTC sync", "Skipped, date is valid")
+        return True
+
+    add_error_detail("RTC sync", "Date invalid, trying NTP")
+    try:
+        print("RTC date invalid, syncing time with NTP...")
+        inky_frame.set_time()
+        print("Time synced to Pico RTC and Inky RTC")
+    except Exception as e:
+        add_error_detail("NTP sync exception", f"{get_exception_name(e)}: {e}")
+        return False
+
+    if rtc_date_is_valid():
+        try:
+            t = time.localtime()
+            add_error_detail("RTC synced time", f"{t[0]:04d}-{t[1]:02d}-{t[2]:02d} {t[3]:02d}:{t[4]:02d}:{t[5]:02d}")
+        except Exception as e:
+            add_error_detail("RTC synced time exception", f"{get_exception_name(e)}: {e}")
+        return True
+
+    add_error_detail("RTC sync", "NTP completed but date still invalid")
+    return False
+
+
 def fetch_hourly_with_backfill():
     """Fetch hourly forecast, backfilling from observations if needed"""
     hourly_data, day_label, target_date = fetch_hourly_forecast()
@@ -1182,9 +1218,10 @@ def main():
         print("Showing meteogram")
 
     clear_error_details()
-    record_runtime_context(screen_mode)
-
     inky_frame.pcf_to_pico_rtc()
+    record_runtime_context(screen_mode)
+    rtc_needs_sync = not rtc_date_is_valid()
+    add_error_detail("RTC date valid", not rtc_needs_sync)
 
     # Connect to WiFi
     if not connect_wifi(WIFI_SSID, WIFI_PASSWORD) and not connect_wifi(ALT_SSID, ALT_PASSWORD):
@@ -1198,12 +1235,10 @@ def main():
     except Exception as e:
         add_error_detail("WiFi IP exception", f"{get_exception_name(e)}: {e}")
 
-    #try:
-    #    print("Syncing time with NTP...")
-    #    inky_frame.set_time()
-    #    print("Time synced!")
-    #except Exception as e:
-    #    print(f"NTP sync failed: {e}")
+    if rtc_needs_sync and not sync_time_if_needed():
+        disconnect_wifi()
+        draw_error_screen(graphics, "Failed to sync device time", LAST_ERROR_DETAILS)
+        return
 
     # Fetch only the data needed for the selected screen
     hourly_data = None
