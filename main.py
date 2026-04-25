@@ -50,6 +50,9 @@ LOCATION_NAME = "Badger Hill"
 # Nearest observation station geohash (find using find_nearest_station.py)
 OBSERVATION_GEOHASH = "gcxh27"
 
+# Most recent failure details shown on the e-ink error screen.
+LAST_ERROR_DETAILS = []
+
 # Display dimensions for Inky Frame 7.3"
 WIDTH = 800
 HEIGHT = 480
@@ -266,12 +269,20 @@ def connect_wifi(ssid, password):
         max_wait -= 1
         print("Waiting for connection...")
         time.sleep(1)
+        
+    time.sleep(2)
     
-    if wlan.isconnected():
+    if wlan.status() >= 3:
         print(f"Connected! IP: {wlan.ifconfig()[0]}")
         return True
     else:
         print("Failed to connect to WiFi")
+        add_error_detail("WiFi failed SSID", ssid)
+        try:
+            add_error_detail("WiFi status", wlan.status())
+            add_error_detail("WiFi config", wlan.ifconfig())
+        except Exception as e:
+            add_error_detail("WiFi status exception", f"{get_exception_name(e)}: {e}")
         return False
 
 
@@ -280,6 +291,63 @@ def disconnect_wifi():
     wlan = network.WLAN(network.STA_IF)
     wlan.disconnect()
     wlan.active(False)
+
+
+# =============================================================================
+# ERROR DIAGNOSTICS
+# =============================================================================
+
+def clear_error_details():
+    """Reset details collected for the next visible error screen."""
+    global LAST_ERROR_DETAILS
+    LAST_ERROR_DETAILS = []
+
+
+def add_error_detail(label, value):
+    """Record one short diagnostic line for the error screen and serial log."""
+    if value is None:
+        return
+
+    try:
+        value = str(value)
+    except:
+        value = "<unprintable>"
+
+    detail = f"{label}: {value}"
+    print(f"ERROR DETAIL - {detail}")
+    LAST_ERROR_DETAILS.append(detail)
+
+
+def get_exception_name(error):
+    """Return a MicroPython-friendly exception class name."""
+    try:
+        return error.__class__.__name__
+    except:
+        return "Exception"
+
+
+def safe_response_snippet(response, max_chars=180):
+    """Best-effort response body snippet without assuming full CPython APIs."""
+    try:
+        if hasattr(response, "text"):
+            body = response.text
+        elif hasattr(response, "content"):
+            body = response.content
+        else:
+            return None
+    except Exception as e:
+        return f"<could not read body: {get_exception_name(e)} {e}>"
+
+    try:
+        if isinstance(body, bytes):
+            body = body.decode("utf-8")
+    except:
+        body = str(body)
+
+    body = str(body).replace("\n", " ").replace("\r", " ").strip()
+    if len(body) > max_chars:
+        body = body[:max_chars] + "..."
+    return body
 
 
 # =============================================================================
@@ -300,23 +368,30 @@ def fetch_daily_forecast():
     }
     
     print(f"Fetching weather for {LOCATION_NAME} ({LATITUDE}, {LONGITUDE})...")
+    add_error_detail("Daily endpoint", url)
     
     try:
         gc.collect()  # Free up memory before request
         response = urequests.get(url, headers=headers)
+        add_error_detail("Daily HTTP status", response.status_code)
         
         if response.status_code == 200:
             data = response.json()
             response.close()
             gc.collect()
-            return parse_daily_forecast(data)
+            forecasts = parse_daily_forecast(data)
+            if not forecasts:
+                add_error_detail("Daily result", "No usable daily forecasts parsed")
+            return forecasts
         else:
             print(f"API Error: {response.status_code}")
+            add_error_detail("Daily response", safe_response_snippet(response))
             response.close()
             return None
             
     except Exception as e:
         print(f"Request failed: {e}")
+        add_error_detail("Daily exception", f"{get_exception_name(e)}: {e}")
         return None
 
 
@@ -341,10 +416,12 @@ def parse_daily_forecast(data):
         features = data.get("features", [])
         if not features:
             print("No forecast features found")
+            add_error_detail("Daily parse", "No features in API response")
             return None
         
         properties = features[0].get("properties", {})
         time_series = properties.get("timeSeries", [])
+        add_error_detail("Daily timeSeries items", len(time_series))
         
         # Process each day, skipping past dates
         day_count = 0
@@ -389,10 +466,14 @@ def parse_daily_forecast(data):
             day_count += 1
             i += 1
         
+        if not forecasts:
+            add_error_detail("Daily parse", f"No forecasts on or after {today}")
+
         return forecasts
 
     except Exception as e:
         print(f"Error parsing forecast: {e}")
+        add_error_detail("Daily parse exception", f"{get_exception_name(e)}: {e}")
         return None
 
 
@@ -409,23 +490,30 @@ def fetch_hourly_forecast():
     }
 
     print(f"Fetching hourly weather for {LOCATION_NAME}...")
+    add_error_detail("Hourly endpoint", url)
 
     try:
         gc.collect()
         response = urequests.get(url, headers=headers)
+        add_error_detail("Hourly HTTP status", response.status_code)
 
         if response.status_code == 200:
             data = response.json()
             response.close()
             gc.collect()
-            return parse_hourly_forecast(data)
+            hourly_data, day_label, target_date = parse_hourly_forecast(data)
+            if not hourly_data:
+                add_error_detail("Hourly result", "No usable hourly forecasts parsed")
+            return hourly_data, day_label, target_date
         else:
             print(f"API Error: {response.status_code}")
+            add_error_detail("Hourly response", safe_response_snippet(response))
             response.close()
             return None, None, None
 
     except Exception as e:
         print(f"Request failed: {e}")
+        add_error_detail("Hourly exception", f"{get_exception_name(e)}: {e}")
         return None, None, None
 
 
@@ -442,10 +530,12 @@ def fetch_observations():
     }
 
     print(f"Fetching observations for station {OBSERVATION_GEOHASH}...")
+    add_error_detail("Observations endpoint", url)
 
     try:
         gc.collect()
         response = urequests.get(url, headers=headers)
+        add_error_detail("Observations HTTP status", response.status_code)
 
         if response.status_code == 200:
             data = response.json()
@@ -454,11 +544,13 @@ def fetch_observations():
             return data
         else:
             print(f"Observations API Error: {response.status_code}")
+            add_error_detail("Observations response", safe_response_snippet(response))
             response.close()
             return None
 
     except Exception as e:
         print(f"Observations request failed: {e}")
+        add_error_detail("Observations exception", f"{get_exception_name(e)}: {e}")
         return None
 
 
@@ -493,15 +585,18 @@ def parse_hourly_forecast(data):
     forecasts = []
     target_date, day_label = get_target_date()
     print(f"Extracting hourly data for {day_label} ({target_date}), 08:00-18:00")
+    add_error_detail("Hourly target", f"{day_label} {target_date} 08:00-18:00")
 
     try:
         features = data.get("features", [])
         if not features:
             print("No forecast features found")
+            add_error_detail("Hourly parse", "No features in API response")
             return None, None, None
 
         properties = features[0].get("properties", {})
         time_series = properties.get("timeSeries", [])
+        add_error_detail("Hourly timeSeries items", len(time_series))
 
         for entry in time_series:
             time_str = entry.get("time", "")
@@ -528,10 +623,15 @@ def parse_hourly_forecast(data):
                 }
                 forecasts.append(forecast)
 
+        add_error_detail("Hourly matched items", len(forecasts))
+        if not forecasts:
+            add_error_detail("Hourly parse", "No entries matched target date/hour window")
+
         return forecasts, day_label, target_date
 
     except Exception as e:
         print(f"Error parsing hourly forecast: {e}")
+        add_error_detail("Hourly parse exception", f"{get_exception_name(e)}: {e}")
         return None, None, None
 
 
@@ -944,7 +1044,48 @@ def draw_weather_display(graphics, forecasts):
     print("Display updated!")
 
 
-def draw_error_screen(graphics, message):
+def draw_wrapped_text(graphics, text, x, y, max_chars, scale=1, line_height=12, max_lines=None):
+    """Draw wrapped bitmap text and return the next y position."""
+    lines_drawn = 0
+    words = str(text).split(" ")
+    line = ""
+
+    for word in words:
+        while len(word) > max_chars:
+            chunk = word[:max_chars]
+            word = word[max_chars:]
+            if line:
+                graphics.text(line, x, y, scale=scale)
+                y += line_height
+                lines_drawn += 1
+                line = ""
+                if max_lines is not None and lines_drawn >= max_lines:
+                    return y
+            graphics.text(chunk, x, y, scale=scale)
+            y += line_height
+            lines_drawn += 1
+            if max_lines is not None and lines_drawn >= max_lines:
+                return y
+
+        candidate = word if not line else line + " " + word
+        if len(candidate) <= max_chars:
+            line = candidate
+        else:
+            graphics.text(line, x, y, scale=scale)
+            y += line_height
+            lines_drawn += 1
+            if max_lines is not None and lines_drawn >= max_lines:
+                return y
+            line = word
+
+    if line and (max_lines is None or lines_drawn < max_lines):
+        graphics.text(line, x, y, scale=scale)
+        y += line_height
+
+    return y
+
+
+def draw_error_screen(graphics, message, details=None):
     """Draw an error message on screen"""
     graphics.set_pen(WHITE)
     graphics.clear()
@@ -957,11 +1098,25 @@ def draw_error_screen(graphics, message):
     graphics.text("Weather Display Error", 10, 15, scale=3)
     
     graphics.set_pen(BLACK)
-    graphics.text(message, 20, 100, scale=2)
-    graphics.text("Please check:", 20, 150, scale=2)
-    graphics.text("- WiFi credentials in secrets.py", 20, 180, scale=1)
-    graphics.text("- Met Office API key", 20, 200, scale=1)
-    graphics.text("- Internet connection", 20, 220, scale=1)
+    draw_wrapped_text(graphics, message, 20, 70, 38, scale=2, line_height=22, max_lines=2)
+
+    y = 125
+    graphics.text("Diagnostics:", 20, y, scale=2)
+    y += 26
+
+    if details:
+        for detail in details:
+            if y > HEIGHT - 58:
+                graphics.text("More details in serial output", 20, y, scale=1)
+                y += 14
+                break
+            y = draw_wrapped_text(graphics, "- " + detail, 20, y, 92, scale=1, line_height=12, max_lines=3)
+    else:
+        graphics.text("- No extra diagnostics captured", 20, y, scale=1)
+        y += 14
+
+    graphics.text("Please check:", 20, HEIGHT - 48, scale=1)
+    graphics.text("WiFi credentials, API keys/subscriptions, quota, endpoint access, internet", 20, HEIGHT - 32, scale=1)
     
     graphics.update()
 
@@ -973,6 +1128,19 @@ def draw_error_screen(graphics, message):
 # Screen modes
 SCREEN_METEOGRAM = 0
 SCREEN_DAILY = 1
+
+
+def record_runtime_context(screen_mode):
+    """Capture context that helps diagnose failures on the device screen."""
+    add_error_detail("Location", f"{LOCATION_NAME} ({LATITUDE}, {LONGITUDE})")
+    add_error_detail("Screen", "daily forecast" if screen_mode == SCREEN_DAILY else "hourly meteogram")
+    add_error_detail("Forecast API key present", bool(MET_OFFICE_API_KEY))
+    add_error_detail("Observation API key present", bool(MET_OFFICE_OBS_KEY))
+    try:
+        t = time.localtime()
+        add_error_detail("Device time", f"{t[0]:04d}-{t[1]:02d}-{t[2]:02d} {t[3]:02d}:{t[4]:02d}:{t[5]:02d}")
+    except Exception as e:
+        add_error_detail("Device time exception", f"{get_exception_name(e)}: {e}")
 
 
 def fetch_hourly_with_backfill():
@@ -1013,12 +1181,22 @@ def main():
         screen_mode = SCREEN_METEOGRAM
         print("Showing meteogram")
 
+    clear_error_details()
+    record_runtime_context(screen_mode)
+
     inky_frame.pcf_to_pico_rtc()
 
     # Connect to WiFi
     if not connect_wifi(WIFI_SSID, WIFI_PASSWORD) and not connect_wifi(ALT_SSID, ALT_PASSWORD):
-        draw_error_screen(graphics, "WiFi connection failed")
+        draw_error_screen(graphics, "WiFi connection failed", LAST_ERROR_DETAILS)
         return
+    clear_error_details()
+    record_runtime_context(screen_mode)
+    try:
+        wlan = network.WLAN(network.STA_IF)
+        add_error_detail("WiFi IP", wlan.ifconfig()[0])
+    except Exception as e:
+        add_error_detail("WiFi IP exception", f"{get_exception_name(e)}: {e}")
 
     #try:
     #    print("Syncing time with NTP...")
@@ -1048,7 +1226,7 @@ def main():
         draw_weather_display(graphics, daily_data)
         print("Daily forecast display complete!")
     else:
-        draw_error_screen(graphics, "Failed to fetch weather data")
+        draw_error_screen(graphics, "Failed to fetch weather data", LAST_ERROR_DETAILS)
 
     # Clear any button presses
     inky_frame.button_a.led_off()
