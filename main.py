@@ -244,6 +244,84 @@ def draw_weather_icon(graphics, x, y, weather_code, size=40):
 
 
 # =============================================================================
+# UK TIME HELPERS
+# =============================================================================
+# The Pico RTC is set from NTP, which means it holds UTC. The Met Office API
+# also timestamps everything in UTC (the "Z" suffix on entry times). The user,
+# however, lives on UK wall-clock time, so date/hour decisions must apply BST
+# when active.
+
+def _weekday(year, month, day):
+    """Day of week using Zeller's congruence (Monday=0 ... Sunday=6)."""
+    y, m = year, month
+    if m < 3:
+        m += 12
+        y -= 1
+    k = y % 100
+    j = y // 100
+    h = (day + (13 * (m + 1)) // 5 + k + k // 4 + j // 4 - 2 * j) % 7
+    return (h + 5) % 7
+
+
+def _last_sunday_of_month(year, month):
+    """Day-of-month of the last Sunday in the given month."""
+    if month in (1, 3, 5, 7, 8, 10, 12):
+        last_day = 31
+    elif month in (4, 6, 9, 11):
+        last_day = 30
+    elif (year % 4 == 0 and year % 100 != 0) or year % 400 == 0:
+        last_day = 29
+    else:
+        last_day = 28
+    return last_day - ((_weekday(year, month, last_day) + 1) % 7)
+
+
+def _is_bst(utc_year, utc_month, utc_day, utc_hour):
+    """Return True if the given UTC moment falls within British Summer Time.
+
+    BST runs from 01:00 UTC on the last Sunday of March to 01:00 UTC on the
+    last Sunday of October.
+    """
+    if utc_month < 3 or utc_month > 10:
+        return False
+    if 4 <= utc_month <= 9:
+        return True
+    transition_day = _last_sunday_of_month(utc_year, utc_month)
+    if utc_month == 3:
+        if utc_day != transition_day:
+            return utc_day > transition_day
+        return utc_hour >= 1
+    if utc_day != transition_day:
+        return utc_day < transition_day
+    return utc_hour < 1
+
+
+def utc_to_uk_local(utc_t):
+    """Convert a UTC time tuple to UK local time, applying BST when active."""
+    if not _is_bst(utc_t[0], utc_t[1], utc_t[2], utc_t[3]):
+        return utc_t
+    return time.localtime(time.mktime(tuple(utc_t)) + 3600)
+
+
+def uk_local_now():
+    """Current UK local time tuple, derived from the device's (UTC) RTC."""
+    return utc_to_uk_local(time.localtime())
+
+
+def utc_iso_to_uk_local(time_str):
+    """Parse 'YYYY-MM-DDTHH:MMZ' UTC and return (date_str, hour) in UK local."""
+    try:
+        y = int(time_str[0:4])
+        mo = int(time_str[5:7])
+        d = int(time_str[8:10])
+        h = int(time_str[11:13])
+    except (ValueError, IndexError):
+        return None, None
+    local = utc_to_uk_local((y, mo, d, h, 0, 0, 0, 0))
+    return f"{local[0]:04d}-{local[1]:02d}-{local[2]:02d}", local[3]
+
+
+# =============================================================================
 # MET OFFICE API FUNCTIONS
 # =============================================================================
 
@@ -289,8 +367,8 @@ def fetch_daily_forecast():
 
 
 def get_today_date_str():
-    """Get today's date as YYYY-MM-DD string"""
-    t = time.localtime()
+    """Get today's UK-local date as YYYY-MM-DD string."""
+    t = uk_local_now()
     return f"{t[0]:04d}-{t[1]:02d}-{t[2]:02d}"
 
 
@@ -449,20 +527,18 @@ def fetch_observations():
 
 def get_target_date():
     """
-    Get the target date for the meteogram.
-    Returns today if before 18:00, tomorrow if after.
+    Get the target UK-local date for the meteogram.
+    Returns today if before 18:00 local, tomorrow if after.
     Also returns a label string.
     """
-    t = time.localtime()
+    t = uk_local_now()
     current_hour = t[3]
 
     if current_hour < 18:
-        # Show today
         date_str = f"{t[0]:04d}-{t[1]:02d}-{t[2]:02d}"
         label = "Today"
     else:
-        # Show tomorrow - add 86400 seconds (24 hours)
-        tomorrow = time.localtime(time.time() + 86400)
+        tomorrow = time.localtime(time.mktime(tuple(t)) + 86400)
         date_str = f"{tomorrow[0]:04d}-{tomorrow[1]:02d}-{tomorrow[2]:02d}"
         label = "Tomorrow"
 
@@ -496,11 +572,12 @@ def parse_hourly_forecast(data):
             if not time_str:
                 continue
 
-            # Extract date and hour from ISO format: 2024-12-27T08:00Z
-            entry_date = time_str[:10]
-            entry_hour = int(time_str[11:13])
+            # API timestamps are UTC (e.g. 2024-12-27T08:00Z); convert to UK
+            # local so the 08:00-18:00 window matches the user's wall clock.
+            entry_date, entry_hour = utc_iso_to_uk_local(time_str)
+            if entry_date is None:
+                continue
 
-            # Only include target date, hours 08:00-18:00
             if entry_date == target_date and 8 <= entry_hour <= 18:
                 forecast = {
                     "hour": entry_hour,
@@ -537,14 +614,15 @@ def backfill_from_observations(forecasts, observations, target_date):
 
     first_forecast_hour = forecasts[0]["hour"]
 
-    # Build dict of observations by hour for target date
+    # Build dict of observations by hour for target date (UK local)
     obs_by_hour = {}
     for obs in observations:
         dt = obs.get("datetime", "")
         if not dt:
             continue
-        obs_date = dt[:10]
-        obs_hour = int(dt[11:13])
+        obs_date, obs_hour = utc_iso_to_uk_local(dt)
+        if obs_date is None:
+            continue
         if obs_date == target_date and 8 <= obs_hour < first_forecast_hour:
             obs_by_hour[obs_hour] = obs
 
@@ -735,9 +813,9 @@ def draw_meteogram(graphics, hourly_data, day_label):
     GRAPH_WIDTH = GRAPH_RIGHT - GRAPH_LEFT
     GRAPH_HEIGHT = GRAPH_BOTTOM - GRAPH_TOP
 
-    # Get current time for header
+    # Get current UK-local time for header
     try:
-        t = time.localtime()
+        t = uk_local_now()
         update_time = f"{t[3]:02d}:{t[4]:02d}"
     except:
         update_time = "--:--"
@@ -903,9 +981,9 @@ def draw_weather_display(graphics, forecasts):
     graphics.set_pen(WHITE)
     graphics.clear()
     
-    # Get current time for header
+    # Get current UK-local time for header
     try:
-        t = time.localtime()
+        t = uk_local_now()
         update_time = f"{t[3]:02d}:{t[4]:02d}"
     except:
         update_time = "--:--"
@@ -966,7 +1044,7 @@ def record_runtime_context(screen_mode):
     add_error_detail("Forecast API key present", bool(MET_OFFICE_API_KEY))
     add_error_detail("Observation API key present", bool(MET_OFFICE_OBS_KEY))
     try:
-        t = time.localtime()
+        t = uk_local_now()
         add_error_detail("Device time", f"{t[0]:04d}-{t[1]:02d}-{t[2]:02d} {t[3]:02d}:{t[4]:02d}:{t[5]:02d}")
     except Exception as e:
         add_error_detail("Device time exception", f"{get_exception_name(e)}: {e}")
