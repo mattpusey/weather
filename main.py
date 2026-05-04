@@ -30,7 +30,7 @@ import inky_frame
 from picographics import PicoGraphics, DISPLAY_INKY_FRAME_SPECTRA_7 as DISPLAY
 from housekeeping import add_error_detail, clear_error_details, get_exception_name, safe_response_snippet
 from housekeeping import connect_wifi, disconnect_wifi, rtc_date_is_valid, sync_time_if_needed
-from housekeeping import uk_local_now, utc_iso_to_uk_local
+from housekeeping import uk_local_now, utc_iso_to_uk_local, weekday
 
 # Try to import secrets - will fail if file doesn't exist
 try:
@@ -580,25 +580,13 @@ def backfill_from_observations(forecasts, observations, target_date):
 # =============================================================================
 
 def get_day_name(date_str):
-    """Convert date string to day name (approximate for MicroPython)"""
-    # Simple day name mapping based on date
-    # In full implementation, use proper date parsing
+    """Convert a YYYY-MM-DD string to a short day name."""
     days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
     try:
-        # Parse YYYY-MM-DD format
         year = int(date_str[0:4])
         month = int(date_str[5:7])
         day = int(date_str[8:10])
-        
-        # Zeller's congruence for day of week
-        if month < 3:
-            month += 12
-            year -= 1
-        k = year % 100
-        j = year // 100
-        h = (day + (13 * (month + 1)) // 5 + k + k // 4 + j // 4 - 2 * j) % 7
-        d = ((h + 5) % 7)  # Convert to Monday = 0
-        return days[d]
+        return days[weekday(year, month, day)]
     except:
         return "???"
 

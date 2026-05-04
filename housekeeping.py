@@ -181,7 +181,7 @@ def sync_time_if_needed(min_year=2024):
     return False
 
 
-def _weekday(year, month, day):
+def weekday(year, month, day):
     """Day of week using Zeller's congruence (Monday=0 ... Sunday=6)."""
     y, m = year, month
     if m < 3:
@@ -203,7 +203,7 @@ def _last_sunday_of_month(year, month):
         last_day = 29
     else:
         last_day = 28
-    return last_day - ((_weekday(year, month, last_day) + 1) % 7)
+    return last_day - ((weekday(year, month, last_day) + 1) % 7)
 
 
 def is_bst(utc_year, utc_month, utc_day, utc_hour):
