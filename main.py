@@ -30,6 +30,7 @@ import inky_frame
 from picographics import PicoGraphics, DISPLAY_INKY_FRAME_SPECTRA_7 as DISPLAY
 from housekeeping import add_error_detail, clear_error_details, get_exception_name, safe_response_snippet
 from housekeeping import connect_wifi, disconnect_wifi, rtc_date_is_valid, sync_time_if_needed
+from housekeeping import uk_local_now, utc_iso_to_uk_local
 
 # Try to import secrets - will fail if file doesn't exist
 try:
@@ -241,84 +242,6 @@ def draw_weather_icon(graphics, x, y, weather_code, size=40):
         # Default: question mark
         graphics.set_pen(WHITE)
         graphics.text("?", x - 8, y - 10, scale=3)
-
-
-# =============================================================================
-# UK TIME HELPERS
-# =============================================================================
-# The Pico RTC is set from NTP, which means it holds UTC. The Met Office API
-# also timestamps everything in UTC (the "Z" suffix on entry times). The user,
-# however, lives on UK wall-clock time, so date/hour decisions must apply BST
-# when active.
-
-def _weekday(year, month, day):
-    """Day of week using Zeller's congruence (Monday=0 ... Sunday=6)."""
-    y, m = year, month
-    if m < 3:
-        m += 12
-        y -= 1
-    k = y % 100
-    j = y // 100
-    h = (day + (13 * (m + 1)) // 5 + k + k // 4 + j // 4 - 2 * j) % 7
-    return (h + 5) % 7
-
-
-def _last_sunday_of_month(year, month):
-    """Day-of-month of the last Sunday in the given month."""
-    if month in (1, 3, 5, 7, 8, 10, 12):
-        last_day = 31
-    elif month in (4, 6, 9, 11):
-        last_day = 30
-    elif (year % 4 == 0 and year % 100 != 0) or year % 400 == 0:
-        last_day = 29
-    else:
-        last_day = 28
-    return last_day - ((_weekday(year, month, last_day) + 1) % 7)
-
-
-def _is_bst(utc_year, utc_month, utc_day, utc_hour):
-    """Return True if the given UTC moment falls within British Summer Time.
-
-    BST runs from 01:00 UTC on the last Sunday of March to 01:00 UTC on the
-    last Sunday of October.
-    """
-    if utc_month < 3 or utc_month > 10:
-        return False
-    if 4 <= utc_month <= 9:
-        return True
-    transition_day = _last_sunday_of_month(utc_year, utc_month)
-    if utc_month == 3:
-        if utc_day != transition_day:
-            return utc_day > transition_day
-        return utc_hour >= 1
-    if utc_day != transition_day:
-        return utc_day < transition_day
-    return utc_hour < 1
-
-
-def utc_to_uk_local(utc_t):
-    """Convert a UTC time tuple to UK local time, applying BST when active."""
-    if not _is_bst(utc_t[0], utc_t[1], utc_t[2], utc_t[3]):
-        return utc_t
-    return time.localtime(time.mktime(tuple(utc_t)) + 3600)
-
-
-def uk_local_now():
-    """Current UK local time tuple, derived from the device's (UTC) RTC."""
-    return utc_to_uk_local(time.localtime())
-
-
-def utc_iso_to_uk_local(time_str):
-    """Parse 'YYYY-MM-DDTHH:MMZ' UTC and return (date_str, hour) in UK local."""
-    try:
-        y = int(time_str[0:4])
-        mo = int(time_str[5:7])
-        d = int(time_str[8:10])
-        h = int(time_str[11:13])
-    except (ValueError, IndexError):
-        return None, None
-    local = utc_to_uk_local((y, mo, d, h, 0, 0, 0, 0))
-    return f"{local[0]:04d}-{local[1]:02d}-{local[2]:02d}", local[3]
 
 
 # =============================================================================
