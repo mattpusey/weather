@@ -30,7 +30,7 @@ import inky_frame
 from picographics import PicoGraphics, DISPLAY_INKY_FRAME_SPECTRA_7 as DISPLAY
 from housekeeping import add_error_detail, clear_error_details, get_exception_name, safe_response_snippet
 from housekeeping import connect_wifi, disconnect_wifi, rtc_date_is_valid, sync_time_if_needed
-from housekeeping import uk_local_now, utc_iso_to_uk_local, weekday
+from housekeeping import uk_local_now, uk_tz_label, utc_iso_to_uk_local, weekday
 
 # Try to import secrets - will fail if file doesn't exist
 try:
@@ -591,19 +591,37 @@ def get_day_name(date_str):
         return "???"
 
 
-def draw_header(graphics, location, update_time):
-    """Draw the header with location and update time"""
-    # Background bar
+_MONTH_NAMES = ("Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+_DAY_NAMES = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+
+
+def update_header_lines():
+    """Build the two 'last updated' header lines: time+tz and weekday+date."""
+    try:
+        t = uk_local_now()
+        clock = f"{t[3]:02d}:{t[4]:02d} {uk_tz_label()}"
+        date_line = f"{_DAY_NAMES[weekday(t[0], t[1], t[2])]} {t[2]:02d} {_MONTH_NAMES[t[1] - 1]} {t[0]}"
+        return clock, date_line
+    except:
+        return "--:-- ?", "Updated --"
+
+
+def draw_update_stamp(graphics):
+    """Draw the two-line 'last updated' block in the right side of the header."""
+    clock, date_line = update_header_lines()
+    graphics.text(clock, WIDTH - 160, 8, scale=2)
+    graphics.text(date_line, WIDTH - 160, 30, scale=1)
+
+
+def draw_header(graphics, location):
+    """Draw the blue header bar with location and the last-updated stamp."""
     graphics.set_pen(BLUE)
     graphics.rectangle(0, 0, WIDTH, 50)
-    
-    # Title
     graphics.set_pen(WHITE)
     graphics.set_font("bitmap8")
     graphics.text(f"Weather: {location}", 10, 15, scale=3)
-    
-    # Update time
-    graphics.text(f"Updated: {update_time}", WIDTH - 250, 18, scale=2)
+    draw_update_stamp(graphics)
 
 
 def draw_day_column(graphics, x, width, forecast, is_today=False):
@@ -724,20 +742,13 @@ def draw_meteogram(graphics, hourly_data, day_label):
     GRAPH_WIDTH = GRAPH_RIGHT - GRAPH_LEFT
     GRAPH_HEIGHT = GRAPH_BOTTOM - GRAPH_TOP
 
-    # Get current UK-local time for header
-    try:
-        t = uk_local_now()
-        update_time = f"{t[3]:02d}:{t[4]:02d}"
-    except:
-        update_time = "--:--"
-
     # Draw header
     graphics.set_pen(BLUE)
     graphics.rectangle(0, 0, WIDTH, 50)
     graphics.set_pen(WHITE)
     graphics.set_font("bitmap8")
     graphics.text(f"{LOCATION_NAME} - {day_label} 08:00-18:00", 10, 15, scale=3)
-    graphics.text(f"Updated: {update_time}", WIDTH - 250, 18, scale=2)
+    draw_update_stamp(graphics)
 
     if not hourly_data or len(hourly_data) == 0:
         graphics.set_pen(BLACK)
@@ -891,16 +902,9 @@ def draw_weather_display(graphics, forecasts):
     # Clear screen
     graphics.set_pen(WHITE)
     graphics.clear()
-    
-    # Get current UK-local time for header
-    try:
-        t = uk_local_now()
-        update_time = f"{t[3]:02d}:{t[4]:02d}"
-    except:
-        update_time = "--:--"
-    
+
     # Draw header
-    draw_header(graphics, LOCATION_NAME, update_time)
+    draw_header(graphics, LOCATION_NAME)
     
     # Calculate column width for 7 days
     num_days = min(len(forecasts), 7)
@@ -956,7 +960,7 @@ def record_runtime_context(screen_mode):
     add_error_detail("Observation API key present", bool(MET_OFFICE_OBS_KEY))
     try:
         t = uk_local_now()
-        add_error_detail("Device time", f"{t[0]:04d}-{t[1]:02d}-{t[2]:02d} {t[3]:02d}:{t[4]:02d}:{t[5]:02d}")
+        add_error_detail("Device time", f"{t[0]:04d}-{t[1]:02d}-{t[2]:02d} {t[3]:02d}:{t[4]:02d}:{t[5]:02d} {uk_tz_label()}")
     except Exception as e:
         add_error_detail("Device time exception", f"{get_exception_name(e)}: {e}")
 

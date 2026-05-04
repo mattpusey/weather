@@ -238,6 +238,12 @@ def uk_local_now():
     return utc_to_uk_local(time.localtime())
 
 
+def uk_tz_label():
+    """Return 'BST' or 'GMT' for the device's current UK local time."""
+    t = time.localtime()
+    return "BST" if is_bst(t[0], t[1], t[2], t[3]) else "GMT"
+
+
 def utc_iso_to_uk_local(time_str):
     """Parse 'YYYY-MM-DDTHH:MMZ' UTC and return (date_str, hour) in UK local."""
     try:
