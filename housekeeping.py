@@ -89,13 +89,13 @@ def connect_wifi(ssid, password):
     print(f"Connecting to {ssid}...")
     wlan.connect(ssid, password)
 
-    max_wait = 20
+    max_wait = 60
     while max_wait > 0:
         if wlan.status() < 0 or wlan.status() >= 3:
             break
         max_wait -= 1
         print("Waiting for connection...")
-        time.sleep(1)
+        time.sleep(3)
 
     time.sleep(2)
 

@@ -990,9 +990,6 @@ def main():
     print("Meteogram + 7-day forecast")
     print("=" * 50)
 
-    # Initialize display
-    graphics = PicoGraphics(DISPLAY)
-    graphics.set_font("bitmap8")
 
     # Determine which screen to show first (before fetching data)
     # Default is meteogram, but if button A woke us, show daily
@@ -1010,9 +1007,15 @@ def main():
     add_error_detail("RTC date valid", not rtc_needs_sync)
 
     # Connect to WiFi
-    if not connect_wifi(WIFI_SSID, WIFI_PASSWORD) and not connect_wifi(ALT_SSID, ALT_PASSWORD):
+    wifi_fail = not connect_wifi(WIFI_SSID, WIFI_PASSWORD) and not connect_wifi(ALT_SSID, ALT_PASSWORD)
+
+    # Initialize display and show wifi error
+    graphics = PicoGraphics(DISPLAY)
+    graphics.set_font("bitmap8")
+    if wifi_fail:  
         draw_error_screen(graphics, "WiFi connection failed")
         return
+
     clear_error_details()
     record_runtime_context(screen_mode)
     try:
